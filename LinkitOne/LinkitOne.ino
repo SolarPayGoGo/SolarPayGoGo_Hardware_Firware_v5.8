@@ -1056,7 +1056,7 @@ void getDataFromMPPT (){
 
   OutputCurrent = recived_message[5][25] * 256;
   OutputCurrent += recived_message[5][26];
-  OutputCurrent = OutputVoltage /100;
+  OutputCurrent = OutputCurrent /100;
 
   OutputPower = OutputVoltage * OutputCurrent;
 
@@ -1327,7 +1327,7 @@ void setup() {
   check_BatteryStatus();
   check_GSMStatus();
   setup_GPRS();
-  update_CurrentTime();
+  //update_CurrentTime();
   getCurrentTime();
   Serial.print ("Current Time : ");
   for (int k = 0;k<5;k++){
@@ -1355,7 +1355,7 @@ void loop() {
        send_SMSWarning();
        Open_DataFile();
        Write_DataFile();
-       if(check_TimeToUpload()){Serial.println("Going to upload");Generate_FTPfileName();upload_DataToFTP(Data_FileNameToUpload);update_CurrentTime();} //update_CurrentTime();
+       if(check_TimeToUpload()){Serial.println("Going to upload");Generate_FTPfileName();upload_DataToFTP(Data_FileNameToUpload);} //update_CurrentTime();
   }
   MainUserInterface();
 }
