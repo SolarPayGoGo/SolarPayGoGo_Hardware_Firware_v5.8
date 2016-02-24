@@ -1,9 +1,15 @@
 ////////////////////////////////////////SYSTEM VARIABLES//////////////////////////////////////////////////
+// Solar Charger Controller
+int SCC_PV_MaxVoltage = 20;
+int SCC_PV_MaxCurrent = 2;
+int SCC_BAT_MaxVoltage = 15;
+int SCC_MaxCurrent = 10;
+int SCC_MinCurrent = SCC_MaxCurrent * -1; 
+
 // update & Logging Interval
 int internal_update_interval = 30000;
 int logging_update_interval = 5;
 // update & Logging Interval
-
 
 // system call
 #include "vmpwr.h"
@@ -66,18 +72,15 @@ int activation_code[16];
 int activation_code_data [6];
 int Decrypted_Code [15];
 // AC status
-#define AC_accepted         0
-#define AC_error            1
-#define AC_oldCode          2
-#define AC_7dayWarning      3
-#define AC_3dayWarning      4
-#define AC_1dayWarning      5
-#define AC_expired          6
-#define PK_entered          7
-#define APN_entered         8
-#define FTP_entered         9
-#define RES_entered         10
-#define STA_entered         11
+#define COM_error           0
+#define AC_accepted         1
+#define AC_error            2
+#define AC_oldCode          3
+#define PK_entered          4
+#define APN_entered         5
+#define FTP_entered         6
+#define RES_entered         7
+#define STA_entered         8
 // Activation_Code
 
 // GSM
@@ -116,7 +119,7 @@ LiquidCrystal_I2C lcd(0x27,16,2);
 // LCD
 
 //RS485
-unsigned long timeToGetDatafromMPPT = 0;
+unsigned long timeToGetDatafromSCC = 0;
 const int load_connect = 2;
 const int data_request = 3;
 const int rs485_mode = 4;
@@ -824,6 +827,7 @@ void check_GSMStatus(){
 
 void check_NewSMS(){
   if(LSMS.available()){
+    memset(SMSData,0,sizeof(SMSData));
     for (int k = 0; k<160; k++){ SMSData [k] = LSMS.read(); if (SMSData [k]<0){break;} }
     char Responds_no[20];
     LSMS.remoteNumber(Responds_no, 20);
@@ -902,43 +906,26 @@ void extract_SMSData(char senderNumber [20]){
     }else if (char(SMSData[0]) == '*'&& char(SMSData[1]) == '#'&& char(SMSData[2]) == 'S'&& char(SMSData[3]) == 'T'&& char(SMSData[4]) == 'A'&& char(SMSData[5]) == '#'){
       Serial.println("Status request entered via SMS");
       SMSRespondStatus = STA_entered;
-    }else{Serial.println("Error when Activation Code entered via SMS");SMSRespondStatus = AC_error;}
+    }else{Serial.println("Error when Activation Code entered via SMS");SMSRespondStatus = COM_error;}
     send_SMSRespond(senderNumber,SMSRespondStatus);
 }
 
 void send_SMSWarning (){
   if ((activation_code_expiryTime [0] == CurrentTime [0]) && (activation_code_expiryTime [1] == CurrentTime [1]) && (activation_code_expiryTime [3] == CurrentTime [3]) && (activation_code_expiryTime [4] == CurrentTime [4]) ){
     int daysDifference = (activation_code_expiryTime [2] - CurrentTime [2]);
+    LSMS.beginSMS(SMSRespondNumber);
+    LSMS.print("Serial No : ");
+    for (int k = 0; k < 15; k++){LSMS.print(SerialCode[k]);}
+    LSMS.print('\n');
     switch (daysDifference){
-      case 7: {send_SMSRespond( SMSRespondNumber ,AC_7dayWarning);break;}
-      case 3: {send_SMSRespond( SMSRespondNumber ,AC_3dayWarning);break;}
-      case 1: {send_SMSRespond( SMSRespondNumber ,AC_1dayWarning);break;}
-      case 0: {send_SMSRespond( SMSRespondNumber ,AC_expired);break;}
+      case 7: {LSMS.print("Current Activation Code is expiring in 7 days");addActivationCodeInfoToSMS();break;}
+      case 3: {LSMS.print("Current Activation Code is expiring in 3 days");addActivationCodeInfoToSMS();break;}
+      case 1: {LSMS.print("Current Activation Code is expiring in 1 day");addActivationCodeInfoToSMS();break;}
+      case 0: {LSMS.print("Current Activation Code is expired");addActivationCodeInfoToSMS();break;}
     }
+    if(LSMS.endSMS()){Serial.println("SMS Warning is sent");}
+    else{Serial.println("SMS Warning is not sent");}
   }
-}
-
-void send_SMSRespond( char phone_no [20],int Status){
-  LSMS.beginSMS(phone_no);
-  LSMS.print("Serial No : ");
-  for (int k = 0; k < 15; k++){LSMS.print(SerialCode[k]);}
-  LSMS.print('\n');
-  switch (Status){
-    case AC_accepted:{LSMS.print("New Activation Code is Accepted");addActivationCodeInfoToSMS();break;}
-    case AC_error: {LSMS.print("New Activation Code is Invaild");addActivationCodeInfoToSMS();break;}
-    case AC_oldCode: {LSMS.print("New Activation Code is Rejected");addActivationCodeInfoToSMS();break;}
-    case AC_7dayWarning: {LSMS.print("Current Activation Code is expiring in 7 days");addActivationCodeInfoToSMS();break;}
-    case AC_3dayWarning: {LSMS.print("Current Activation Code is expiring in 3 days");addActivationCodeInfoToSMS();break;}
-    case AC_1dayWarning: {LSMS.print("Current Activation Code is expiring in 1 day");addActivationCodeInfoToSMS();break;}
-    case AC_expired: {LSMS.print("Current Activation Code is expired");addActivationCodeInfoToSMS();break;}
-    case PK_entered: {LSMS.print("New Private Key is entered");break;}
-    case APN_entered: {LSMS.print("New APN & System Setting is entered");break;}
-    case FTP_entered: {LSMS.print("New FTP Setting is entered");break;}
-    case RES_entered: {LSMS.print("Reset Command is entered");break;}
-    case STA_entered: {LSMS.print("Status request command is entered");addSystemStatusToSMS();break;}
-  }
-  if(LSMS.endSMS()){Serial.println("SMS Responds is sent");}
-  else{Serial.println("SMS Responds is not sent");}
 }
 
 void addActivationCodeInfoToSMS (){
@@ -953,36 +940,56 @@ void addActivationCodeInfoToSMS (){
   for (int k = 0; k < 5; k++){LSMS.print(activation_code_expiryTime[k]);LSMS.print(" ");}
 }
 
+void send_SMSRespond( char phone_no [20],int Status){
+  LSMS.beginSMS(phone_no);
+  for (int k = 0; k < 15; k++){LSMS.print(SerialCode[k]);}
+  LSMS.print(",");
+  switch (Status){
+    case COM_error:{LSMS.print("COM,ERR");break;}
+    case AC_accepted:{LSMS.print("ATC,ACC");break;}
+    case AC_error: {LSMS.print("ATC,ERR");break;}
+    case AC_oldCode: {LSMS.print("ATC,REJ");break;}
+    case PK_entered: {LSMS.print("PRK,ACC");break;}
+    case APN_entered: {LSMS.print("APN,ACC");break;}
+    case FTP_entered: {LSMS.print("FTP,ACC");break;}
+    case RES_entered: {LSMS.print("RES,ACC");break;}
+    case STA_entered: {LSMS.print("STA,ACC");addSystemStatusToSMS();break;}
+  }
+  if(LSMS.endSMS()){Serial.println("SMS Responds is sent");}
+  else{Serial.println("SMS Responds is not sent");}
+  if (Status == AC_accepted) {send_SMS_ATC_ACCRespond();}
+}
+
+void send_SMS_ATC_ACCRespond(){
+  LSMS.beginSMS(SMSRespondNumber);
+  LSMS.print("Serial No : ");
+  for (int k = 0; k < 15; k++){LSMS.print(SerialCode[k]);}
+  LSMS.print('\n');
+  LSMS.print("NEW Activation code is accepted");
+  addActivationCodeInfoToSMS();
+  if(LSMS.endSMS()){Serial.println("SMS Confitmation Respond is sent");}
+  else{Serial.println("SMS Confitmation Respond is not sent");}
+}
+
 void addSystemStatusToSMS(){
-  LSMS.print('\n');
-  LSMS.print("Lat: ");
+  LSMS.print(",");
   LSMS.print(latitude);
-  LSMS.print('\n');
-  LSMS.print("Long: ");
+  LSMS.print(",");
   LSMS.print(longitude);
-  LSMS.print('\n');
-  LSMS.print("Time: ");
-  for (int k = 0; k < 5; k++){LSMS.print(CurrentTime[k]);LSMS.print(" ");}
-  LSMS.print('\n');
-  LSMS.print("PV V: ");
+  LSMS.print(",");
+  for (int k = 0; k < 5; k++){LSMS.print(CurrentTime[k]);LSMS.print(",");}
   LSMS.print(SolarPanelVoltage);
-  LSMS.print('\n');
-  LSMS.print("PV A: ");
+  LSMS.print(",");
   LSMS.print(SolarPanelCurrent);
-  LSMS.print('\n');
-  LSMS.print("BATV: ");
+  LSMS.print(",");
   LSMS.print(BatteryVoltage);
-  LSMS.print('\n');
-  LSMS.print("BATA: ");
+  LSMS.print(",");
   LSMS.print(BatteryCurrent);
-  LSMS.print('\n');
-  LSMS.print("BAT%: ");
+  LSMS.print(",");
   LSMS.print(BatteryPercentage);
-  LSMS.print('\n');
-  LSMS.print("OUTV: ");
+  LSMS.print(",");
   LSMS.print(OutputVoltage);
-  LSMS.print('\n');
-  LSMS.print("OUTA: ");
+  LSMS.print(",");
   LSMS.print(OutputCurrent);
 }
 
@@ -1013,7 +1020,8 @@ int check_Next_DataRecordTime(){
   } else {return false;}
 }
 
-void getDataFromMPPT (){
+void getDataFromSCC (){
+  float previousValue[3];
   byte recived_message [10] [49];
   unsigned long timeOut;
   //while(Serial1.available()){Serial.read();}
@@ -1031,14 +1039,23 @@ void getDataFromMPPT (){
       index++;
     } 
   }
+
+  previousValue [0] = SolarPanelVoltage;
+  previousValue [1] = SolarPanelCurrent;
+  
   SolarPanelVoltage = recived_message[5][7] * 256;
   SolarPanelVoltage += recived_message[5][8];
   SolarPanelVoltage = SolarPanelVoltage / 100;
   SolarPanelCurrent = recived_message[5][9] * 256;
   SolarPanelCurrent += recived_message[5][10];
   SolarPanelCurrent = SolarPanelCurrent / 100;
+  if ((SolarPanelVoltage > SCC_PV_MaxVoltage)||(SolarPanelVoltage < 0)) {SolarPanelVoltage = previousValue [0];}
+  if ((SolarPanelCurrent > SCC_PV_MaxCurrent)||(SolarPanelCurrent < 0)) {SolarPanelCurrent = previousValue [1];}
   SolarPanelPower = SolarPanelVoltage * SolarPanelCurrent;
   
+  previousValue [0] = BatteryVoltage;
+  previousValue [1] = BatteryCurrent;
+  previousValue [2] = BatteryPercentage;
   
   BatteryVoltage = recived_message[7][3] * 256;
   BatteryVoltage += recived_message[7][4];
@@ -1047,17 +1064,23 @@ void getDataFromMPPT (){
   BatteryCurrent += recived_message[7][6];
   if (BatteryCurrent > 32767) {BatteryCurrent = (65536-BatteryCurrent)*(-1);};
   BatteryCurrent = BatteryCurrent /100;
-
   BatteryPercentage = recived_message[5][46];
+
+  if ((BatteryVoltage > SCC_BAT_MaxVoltage)||(BatteryVoltage < 0)) {BatteryVoltage = previousValue [0];}
+  if ((BatteryCurrent > SCC_MaxCurrent)||(BatteryCurrent < SCC_MinCurrent)) {BatteryCurrent = previousValue [1];}
+  if ((BatteryPercentage > 100)||(BatteryVoltage < 0)) {BatteryPercentage = previousValue [2];}
+
+  previousValue [0] = OutputVoltage;
+  previousValue [1] = OutputCurrent;
 
   OutputVoltage = recived_message[5][23] * 256;
   OutputVoltage += recived_message[5][24];
   OutputVoltage = OutputVoltage /100;
-
   OutputCurrent = recived_message[5][25] * 256;
   OutputCurrent += recived_message[5][26];
   OutputCurrent = OutputCurrent /100;
-
+  if ((OutputVoltage > SCC_BAT_MaxVoltage)||(OutputVoltage < 0)) {OutputVoltage = previousValue [0];}
+  if ((OutputCurrent > SCC_MaxCurrent)||(OutputCurrent < 0)) {OutputCurrent = previousValue [1];}
   OutputPower = OutputVoltage * OutputCurrent;
 
   if (BatteryCurrent > 0) {MainBatteryCharging = true;} else {MainBatteryCharging = false;}
@@ -1327,7 +1350,7 @@ void setup() {
   check_BatteryStatus();
   check_GSMStatus();
   setup_GPRS();
-  //update_CurrentTime();
+  update_CurrentTime();
   getCurrentTime();
   Serial.print ("Current Time : ");
   for (int k = 0;k<5;k++){
@@ -1349,7 +1372,7 @@ void loop() {
   getCurrentTime();
   update_SystemStatus();
   if (connected_Load == true) {digitalWrite(load_connect, HIGH);} else {digitalWrite(load_connect, LOW);}
-  if (timeToGetDatafromMPPT < millis()){ timeToGetDatafromMPPT = millis() + internal_update_interval; getDataFromMPPT();}
+  if (timeToGetDatafromSCC < millis()){ timeToGetDatafromSCC = millis() + internal_update_interval; getDataFromSCC();}
   if (lcd_backlightTimeOut < millis()){lcd.noBacklight(); delay(2000);} else {lcd.backlight();}
   if (check_Next_DataRecordTime()){
        send_SMSWarning();
